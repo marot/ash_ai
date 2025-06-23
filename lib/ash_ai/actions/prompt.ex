@@ -129,6 +129,38 @@ defmodule AshAi.Actions.Prompt do
     adapter.run(data, adapter_opts)
   end
 
+  @doc """
+  Extracts the prompt that would be generated for a prompt action without executing it.
+  
+  This is useful for debugging, testing, or inspecting what prompts would be sent to the LLM.
+  
+  ## Examples
+  
+      iex> input = Ash.ActionInput.for_action(MyResource, :analyze_sentiment, %{text: "I love this!"})
+      iex> AshAi.Actions.Prompt.extract_prompt(input)
+      %{
+        system_prompt: "You are responsible for performing the `analyze_sentiment` action...",
+        user_message: "# Action Inputs\\n\\n- text: \\"I love this!\\"",
+        json_schema: %{type: "string", enum: ["positive", "negative", "neutral"]},
+        tools: []
+      }
+  
+  """
+  def extract_prompt(input, opts \\ []) do
+    context = opts[:context] || %{}
+    
+    json_schema = get_json_schema(input)
+    {system_prompt, user_message} = get_prompts(input, opts, context)
+    tools = get_tools(opts, input, context)
+    
+    %{
+      system_prompt: system_prompt,
+      user_message: user_message,
+      json_schema: json_schema,
+      tools: tools
+    }
+  end
+
   defp get_tools(opts, input, context) do
     case opts[:tools] do
       nil ->

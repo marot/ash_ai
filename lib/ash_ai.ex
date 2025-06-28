@@ -79,7 +79,7 @@ defmodule AshAi do
     target: Tool,
     describe: """
     Expose an Ash action as a tool that can be called by LLMs.
-    
+
     Tools allow LLMs to interact with your application by calling specific actions on resources.
     Only public attributes can be used for filtering, sorting, and aggregation, but the `load`
     option allows including private attributes in the response data.

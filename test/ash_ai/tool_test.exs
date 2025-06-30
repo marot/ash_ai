@@ -1,5 +1,6 @@
 defmodule AshAi.ToolTest do
   use ExUnit.Case, async: true
+  alias Ash.Test
   alias AshAi.ChatFaker
   alias LangChain.Chains.LLMChain
   alias LangChain.Message
@@ -7,6 +8,10 @@ defmodule AshAi.ToolTest do
 
   defmodule TestResource do
     use Ash.Resource, domain: TestDomain, data_layer: Ash.DataLayer.Ets
+
+    code_interface do
+      define :read_with_calculation, action: :read_with_calculation
+    end
 
     attributes do
       uuid_v7_primary_key(:id, writable?: true)
@@ -20,9 +25,48 @@ defmodule AshAi.ToolTest do
       attribute :internal_status, :string
     end
 
+    calculations do
+      calculate :formatted_name, :string do
+        description "Formats the name with a prefix"
+        public? true
+        argument :prefix, :string, allow_nil?: false
+
+        calculation fn records, %{arguments: %{prefix: prefix}} ->
+          Enum.map(records, fn record ->
+            "#{prefix} #{record.public_name}"
+          end)
+        end
+      end
+
+      calculate :add_one_and_one, :integer do
+        description "Adds one and one"
+        public? true
+
+        calculation fn records, _context ->
+          Enum.map(records, fn _record ->
+            1 + 1
+          end)
+        end
+      end
+    end
+
     actions do
       defaults [:read, :create]
       default_accept [:id, :public_name, :public_email, :private_notes, :internal_status]
+
+      read :read_with_calculation do
+        description "Read with calculation loading in before_action"
+        argument :name_prefix, :string, allow_nil?: false
+
+        prepare before_action(fn query, _context ->
+                  dbg("Before action being called")
+                  prefix = query.arguments.name_prefix
+
+                  query
+                  |> Ash.Query.load(:add_one_and_one)
+                  |> Ash.Query.load(formatted_name: %{prefix: prefix})
+                end)
+      end
     end
   end
 
@@ -35,6 +79,7 @@ defmodule AshAi.ToolTest do
 
     tools do
       tool :read_test_resources, TestResource, :read, load: [:internal_status]
+      tool :read_with_calculation, TestResource, :read_with_calculation
     end
   end
 
@@ -78,6 +123,44 @@ defmodule AshAi.ToolTest do
       # Internal status is included because it's a loaded field
       assert tool_result.content ==
                "[{\"id\":\"0197b375-4daa-7112-a9d8-7f0104485646\",\"public_name\":\"John Doe\",\"public_email\":\"john@example.com\",\"internal_status\":\"classified\"}]"
+    end
+
+    test "loads calculation with argument in before_action", %{resource: _resource} do
+      tool_call = %LangChain.Message.ToolCall{
+        status: :complete,
+        type: :function,
+        call_id: "call_id",
+        name: "read_with_calculation",
+        arguments: %{"input" => %{"name_prefix" => "Dr."}},
+        index: 0
+      }
+
+      {:ok, action} = Ash.Helpers.get_action(TestResource, [], :read, :read_with_calculation)
+      dbg(action)
+
+      dbg(TestResource.read_with_calculation(%{name_prefix: "Dr."}))
+
+      dbg(
+        Ash.Actions.Read.run(
+          TestResource
+          |> Ash.Query.for_read(:read_with_calculation, %{name_prefix: "Dr."}),
+          action,
+          arguments: %{name_prefix: "Dr."}
+        )
+      )
+
+      {:ok, chain} = chain() |> run_chain(tool_call)
+
+      %{content: content, processed_content: [processed_content]} =
+        chain.messages
+        |> Enum.find(&(is_nil(&1.tool_results) == false))
+        |> Map.get(:tool_results)
+        |> Enum.at(0)
+
+      assert processed_content.formatted_name == "Dr. John Doe"
+
+      assert content =
+               "[{\"id\":\"0197b375-4daa-7112-a9d8-7f0104485646\",\"public_name\":\"John Doe\",\"public_email\":\"john@example.com\",\"formatted_name\":\"Dr. John Doe\"}]"
     end
   end
 
